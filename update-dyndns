@@ -1,0 +1,40 @@
+#!/bin/bash
+set -Eeuo pipefail
+set -x
+cd "$(dirname "$(readlink -e "$0")")"
+source .env
+touch .previous_ip
+source .previous_ip
+
+function healthcheck_ping {
+    if [ -n "$HEALTHCHECK_URL" ]; then
+        curl -fsS --max-time 10 --retry 3 -o /dev/null "$HEALTHCHECK_URL"
+    fi
+}
+
+MY_IP=$(curl -fsS --max-time 10 --retry 3 https://ifconfig.me/ip)
+PREVIOUS_IP=${PREVIOUS_IP:-}
+
+if [[ ! "$MY_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then  
+    # this is not a proper IP validation, but it's good enough in our case
+    echo "Didn't get a valid IP: ${MY_IP}" >&2
+    exit 1;
+elif [[ "$MY_IP" == "$PREVIOUS_IP" ]]; then
+    healthcheck_ping;
+    exit 0;
+fi
+
+curl \
+  -fsS \
+  --max-time 10 \
+  --retry 3 \
+  --output /dev/null \
+  --request PATCH \
+  --url "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE}/dns_records/${CLOUDFLARE_RECORD_ID}" \
+  --header "Content-Type: application/json" \
+  --header "Authorization: Bearer ${CLOUDFLARE_TOKEN}" \
+  --data "{\"content\": \"${MY_IP}\"}"
+
+echo "PREVIOUS_IP=${MY_IP}" > .previous_ip
+
+healthcheck_ping;
